@@ -206,6 +206,13 @@ function doPost_(e) {
   }
 }
 
+// 사진 기능 준비: 처음 한 번 Apps Script 편집기에서 이 함수를 고르고 ▶ 실행을 눌러 드라이브 권한을 허용해요.
+// ('DriveApp ... 권한이 없습니다' 오류가 날 때도 이걸 실행하면 돼요)
+function setupPhotos() {
+  const f = photoFolder_();
+  Logger.log('사진 폴더 준비 완료: ' + f.getUrl());
+}
+
 // 수업 시연용 예시 제안 넣기: Apps Script 편집기 위쪽에서 이 함수를 고르고 ▶ 실행을 눌러요.
 // 여러 번 실행해도 같은 제목은 한 번만 들어가요. 필요 없으면 교사 화면에서 지우면 돼요.
 function addSampleProposals() {
