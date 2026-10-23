@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>은평 어린이 참여마당</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jua&family=Noto+Sans+KR:wght@400;500;700;900&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="mode-note" data-mode-note hidden></div>
+<header class="top">
+  <div class="wrap">
+    <div class="brand" id="brand">
+      <div><b data-site-name></b><span class="practice">수업용</span><br><small><span data-region></span> 주민참여 연습 플랫폼</small></div>
+    </div>
+    <div class="me" id="meBox"></div>
+  </div>
+</header>
+<nav class="tabs" aria-label="메뉴">
+  <div class="wrap">
+    <a href="#propose" data-tab="propose">제안</a>
+    <a href="#vote" data-tab="vote">투표</a>
+    <a href="#result" data-tab="result">결과</a>
+    <span class="phase-pill" id="phasePill">불러오는 중</span>
+  </div>
+</nav>
+<div id="view"><div class="loading">참여마당을 여는 중이에요…</div></div>
+<footer>
+  <div class="wrap">
+    <span>수업을 위해 만든 연습용 사이트예요. 은평구청 공식 누리집이 아니에요.</span>
+    <span class="refresh" id="refreshNote"></span>
+  </div>
+</footer>
+<div id="modalRoot"></div>
+
+<script src="config.js"></script>
+<script src="core.js"></script>
+<script src="common.js"></script>
+<script>
+const R = CFG.regionName;
+const S = {
+  data: null, name: lsGet("ep-name") || "", code: lsGet("ep-code") || "",
+  tab: "propose", detail: null, q: "", cat: "all", dong: "all", status: "all", sort: "new", picks: null, busy: false,
+};
+document.getElementById("brand").insertAdjacentHTML("afterbegin", BRAND_SVG);
+
+async function refresh() {
+  try {
+    const d = await Api.call({ action: "state", name: S.name });
+    if (!d.ok) throw new Error(d.error);
+    S.data = d;
+    document.getElementById("refreshNote").textContent = "마지막 새로고침 " + formatTime(Date.now()).slice(11);
+    // 검색어를 치는 중에는 화면을 다시 그리지 않아요
+    if (!(document.activeElement && document.activeElement.id === "q")) render();
+  } catch (e) {
+    if (!S.data) document.getElementById("view").innerHTML = `<div class="wrap"><div class="empty" style="margin-top:40px"><strong>참여마당에 연결하지 못했어요</strong>인터넷 연결을 확인하고 새로고침해 주세요.</div></div>`;
+  }
+}
+
+// 학생 요청 보내기: 이름·코드를 붙이고, 끝나면 새로고침
+async function send(body, okMsg) {
+  if (!S.name || (S.data && S.data.needCode && !S.code)) { openJoin(); return false; }
+  if (S.busy) return false;
+  S.busy = true;
+  try {
+    const r = await Api.call(Object.assign({ name: S.name, code: S.code }, body));
+    if (!r.ok) {
+      if (r.code === "badcode") { S.code = ""; lsDel("ep-code"); openJoin("참여 코드가 맞지 않아요. 선생님께 물어보세요."); }
+      else toast(r.error || "저장하지 못했어요.");
+      return false;
+    }
+    if (okMsg) toast(okMsg);
+    return r;
+  } catch (e) {
+    toast("저장하지 못했어요. 인터넷 연결을 확인해 주세요.");
+    return false;
+  } finally {
+    S.busy = false;
+    await refresh();
+  }
+}
+
+/* ---------- 화면 ---------- */
+function setTab(t) { S.tab = t; S.detail = null; S.picks = null; render(); scrollTo(0, 0); }
+addEventListener("hashchange", () => { const t = location.hash.slice(1); if (PHASE_NAMES[t] || t === "propose") setTab(t); });
+document.querySelectorAll("nav.tabs a").forEach(a => a.addEventListener("click", e => {
+  if (location.hash === "#" + a.dataset.tab) { e.preventDefault(); setTab(a.dataset.tab); }
+}));
+
+const $ = s => document.querySelector(s);
+const esc = escapeHtml;
+const byId = id => S.data.proposals.find(p => p.id === id);
+const candidates = () => S.data.proposals.filter(p => p.likes >= S.data.settings.threshold).sort((a, b) => b.likes - a.likes || a.createdAt - b.createdAt);
+
+function render() {
+  if (!S.data) return;
+  const st = S.data.settings;
+  $("#phasePill").textContent = PHASE_NAMES[st.phase];
+  document.querySelectorAll("nav.tabs a").forEach(a => {
+    if (a.dataset.tab === S.tab) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  });
+  $("#meBox").innerHTML = S.name
+    ? `<span><b>${esc(S.name)}</b> 님으로 참여 중</span><button type="button" id="meBtn">이름 바꾸기</button>`
+    : `<button type="button" id="meBtn">이름 적고 참여하기</button>`;
+  $("#meBtn").onclick = () => openJoin();
+  if (S.detail && byId(S.detail)) return renderDetail();
+  S.detail = null; detailBuiltFor = null;
+  if (S.tab === "vote") return renderVote();
+  if (S.tab === "result") return renderResult();
+  renderPropose();
+}
+
+function pillFor(p) {
+  const st = S.data.settings, cand = p.likes >= st.threshold;
+  if (st.phase === "propose") return cand ? `<span class="pill cand">투표 후보</span>` : `<span class="pill">공감 모으는 중 <i>|</i> ${p.likes}/${st.threshold}</span>`;
+  if (!cand) return `<span class="pill done">제안 마감</span>`;
+  if (st.phase === "vote") return `<span class="pill cand">투표 중</span>`;
+  const r = rankProposals(S.data).find(x => x.p.id === p.id);
+  return r && r.rank === 1 && r.v > 0 ? `<span class="pill win">선정</span>` : `<span class="pill done">투표 완료</span>`;
+}
+function card(p) {
+  return `<button type="button" class="card" data-open="${esc(p.id)}">
+    ${pillFor(p)}
+    <h3>[${esc(p.category)}] ${esc(p.title)}</h3>
+    <p><span class="dong">${esc(p.dong)}</span>${esc(p.body)}</p>
+    <div class="meta"><span>${HEART_SVG}${p.likes}</span><span>${BUBBLE_SVG}${p.comments}</span></div>
+  </button>`;
+}
+function bindOpen() {
+  document.querySelectorAll("[data-open]").forEach(b => b.onclick = e => { e.stopPropagation(); S.detail = b.dataset.open; render(); scrollTo(0, 0); });
+}
+
+function renderPropose() {
+  const st = S.data.settings, all = S.data.proposals;
+  let list = all.filter(p => {
+    if (S.cat !== "all" && p.category !== S.cat) return false;
+    if (S.dong !== "all" && p.dong !== S.dong) return false;
+    const cand = p.likes >= st.threshold;
+    if (S.status === "cand" && !cand) return false;
+    if (S.status === "gather" && cand) return false;
+    if (S.q && !(p.title + " " + p.body + " " + p.author + " " + p.dong).includes(S.q)) return false;
+    return true;
+  });
+  list.sort(S.sort === "like" ? (a, b) => b.likes - a.likes || b.createdAt - a.createdAt : (a, b) => b.createdAt - a.createdAt);
+  const open = st.phase === "propose";
+  $("#view").innerHTML = `
+  <div class="wrap" style="padding-block:24px 0"><div class="hero">
+    <div class="hero-txt"><span>우리가 모여 ${esc(R)}의 내일이 됩니다</span><strong>${esc(R)} 어린이 주민참여</strong>
+      <p>참여의 가치, 주민과 같이!<br>${esc(R)}에 필요한 일이라면 무엇이든 자유롭게 제안하세요.</p>
+      <button class="btn pillbtn" type="button" id="heroBtn">${open ? "제안하러 가기 →" : "투표 보러 가기 →"}</button></div>
+    <svg class="hero-art" viewBox="0 0 320 180" aria-hidden="true">
+      <ellipse cx="160" cy="132" rx="130" ry="34" fill="var(--surface)" stroke="var(--line)" stroke-width="2"/>
+      <rect x="112" y="116" width="40" height="26" rx="3" fill="var(--bg)" stroke="var(--muted)" transform="rotate(-8 132 129)"/>
+      <rect x="168" y="114" width="40" height="26" rx="3" fill="var(--bg)" stroke="var(--muted)" transform="rotate(6 188 127)"/>
+      <path d="M120 128h22M120 133h14M176 124h22M176 129h16" stroke="var(--accent)" stroke-width="2"/>
+      <circle cx="58" cy="70" r="16" fill="var(--gold)"/><path d="M34 120q24-40 48 0" fill="var(--leaf)"/>
+      <circle cx="118" cy="52" r="16" fill="#8d5b3b"/><path d="M94 104q24-40 48 0" fill="var(--accent)"/>
+      <circle cx="202" cy="52" r="16" fill="#3b2a20"/><path d="M178 104q24-40 48 0" fill="var(--heart)"/>
+      <circle cx="262" cy="70" r="16" fill="var(--gold)"/><path d="M238 120q24-40 48 0" fill="var(--leaf)"/>
+      <path d="M160 30c-3-6-11-3-9 3 1 4 9 9 9 9s8-5 9-9c2-6-6-9-9-3z" fill="var(--heart)"/>
+    </svg>
+  </div></div>
+  <section class="band"><div class="wrap">
+    <h1>제안</h1>
+    <div class="band-row">
+      <div><h2>여러분의 제안으로 ${esc(R)}가 바뀝니다.</h2>
+      <p><b>${st.threshold}명 이상 공감</b>한 제안은 투표에 올라갑니다.</p></div>
+      <button class="btn" id="newBtn" type="button" ${open ? "" : "disabled"}>${open ? "제안 등록하기" : "제안 기간이 끝났어요"}</button>
+    </div>
+    <div class="stats">
+      <div><span>제안</span><strong>${all.length}</strong><em>건</em></div>
+      <div><span>공감제안</span><strong>${candidates().length}</strong><em>건</em></div>
+      <div><span>투표 참여</span><strong>${S.data.voters}</strong><em>명</em></div>
+    </div>
+    <form class="search" id="searchForm"><input id="q" type="search" placeholder="검색어를 입력해 주세요." value="${esc(S.q)}" aria-label="검색어"><button class="btn ghost" type="submit">검색</button></form>
+  </div></section>
+  <main class="wrap">
+    <div class="toolbar">
+      <div class="filters">
+        <select id="fCat" aria-label="분류"><option value="all">분류 전체</option>${CFG.categories.map(c => `<option ${S.cat === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
+        <select id="fDong" aria-label="동"><option value="all">동 전체</option>${CFG.dongs.map(c => `<option ${S.dong === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>
+        <select id="fStatus" aria-label="진행상태"><option value="all">진행상태 전체</option><option value="gather" ${S.status === "gather" ? "selected" : ""}>공감 모으는 중</option><option value="cand" ${S.status === "cand" ? "selected" : ""}>투표 후보</option></select>
+        <select id="fSort" aria-label="정렬"><option value="new">최신순</option><option value="like" ${S.sort === "like" ? "selected" : ""}>공감순</option></select>
+      </div>
+      <span class="count">총 <b>${list.length}</b>건의 제안이 있습니다.</span>
+    </div>
+    ${list.length ? `<div class="grid">${list.map(card).join("")}</div>`
+      : all.length ? `<div class="empty"><strong>찾는 제안이 없어요</strong>검색어나 분류, 동을 바꿔 보세요.</div>`
+      : `<div class="empty"><strong>아직 올라온 제안이 없어요</strong>우리 동네 ${esc(R)}를 더 좋게 바꿀 생각이 있나요? 첫 번째 제안을 올려 주세요.${open ? '<br><button class="btn" type="button" id="newBtn2">첫 제안 올리기</button>' : ""}</div>`}
+  </main>`;
+  $("#heroBtn").onclick = () => open ? openNew() : (location.hash = "#vote");
+  $("#newBtn").onclick = openNew;
+  if ($("#newBtn2")) $("#newBtn2").onclick = openNew;
+  $("#searchForm").onsubmit = e => { e.preventDefault(); S.q = $("#q").value.trim(); render(); };
+  $("#fCat").onchange = e => { S.cat = e.target.value; render(); };
+  $("#fDong").onchange = e => { S.dong = e.target.value; render(); };
+  $("#fStatus").onchange = e => { S.status = e.target.value; render(); };
+  $("#fSort").onchange = e => { S.sort = e.target.value; render(); };
+  bindOpen();
+}
+
+/* 상세: 댓글 입력칸이 새로고침에 지워지지 않도록 뼈대는 한 번만 만들어요 */
+let detailBuiltFor = null;
+function renderDetail() {
+  const id = S.detail, p = byId(id), st = S.data.settings, n = p.likes, cand = n >= st.threshold;
+  if (detailBuiltFor !== id || !$("#dRoot")) {
+    detailBuiltFor = id;
+    $("#view").innerHTML = `<section class="band"><div class="wrap"><h1>제안</h1><div class="stepper" id="dStep"></div></div></section>
+    <main class="wrap" id="dRoot">
+      <div id="dTop"></div>
+      <div class="like-row"><button class="btn like-btn" type="button" id="likeBtn"></button></div>
+      <div class="right" style="padding-bottom:20px"><span id="delBox"></span><button class="btn ghost small" type="button" id="backBtn">목록보기</button></div>
+      <div class="section"><h3>제안 동의</h3><div id="likeInfo"></div></div>
+      <div class="section"><h3>댓글쓰기</h3>
+        <textarea id="cText" maxlength="300" placeholder="나의 의견을 보태 볼까요? (욕설, 다른 사람을 놀리는 말, 개인정보를 쓰면 지워질 수 있어요. 모두가 기분 좋은 토론장을 함께 만들어요!)"></textarea>
+        <div class="c-foot"><span id="cLen">0 / 300</span><button class="btn small" type="button" id="cBtn">댓글 등록</button></div>
+        <ul class="comments" id="cList"></ul>
+      </div>
+    </main>`;
+    $("#backBtn").onclick = () => { S.detail = null; render(); };
+    $("#cText").oninput = e => { $("#cLen").textContent = `${e.target.value.length} / 300`; };
+    $("#cBtn").onclick = async () => {
+      const t = $("#cText").value.trim();
+      if (!t) return toast("댓글 내용을 적어 주세요.");
+      const ok = await send({ action: "comment", pid: id, text: t }, "댓글을 남겼어요.");
+      if (ok) { $("#cText").value = ""; $("#cLen").textContent = "0 / 300"; }
+    };
+    $("#likeBtn").onclick = async () => {
+      $("#likeBtn").disabled = true;
+      const liked = S.data.myLikes.includes(id);
+      await send({ action: "like", pid: id }, liked ? "공감을 취소했어요." : "공감했어요!");
+    };
+  }
+  const steps = ["제안", `공감 ${Math.min(n, st.threshold)}/${st.threshold}`, "투표", "결과"];
+  let cur = 1;
+  if (cand && st.phase === "vote") cur = 2;
+  if (cand && st.phase === "result") cur = 3;
+  $("#dStep").innerHTML = steps.map((s, i) => `<div class="${i < cur || (cand && i === 1) ? "past" : ""} ${i === cur && !(cand && i === 1) ? "on" : ""}">${s}</div>`).join("");
+  $("#dTop").innerHTML = `<div class="d-head"><div>${pillFor(p)}<h1>[${esc(p.category)}] ${esc(p.title)}</h1></div></div>
+    <div class="d-meta"><span><b>장소</b> ${esc(R)} ${esc(p.dong)} &nbsp; <b>작성자</b> ${esc(p.author)}</span><span>${formatTime(p.createdAt)}</span></div>
+    <div class="d-body">${esc(p.body)}</div><span class="tag">#${esc(p.category)}</span><span class="tag" style="margin-left:0">#${esc(p.dong)}</span>`;
+  const liked = S.data.myLikes.includes(id), canLike = st.phase === "propose";
+  const lb = $("#likeBtn");
+  lb.classList.toggle("on", liked); lb.disabled = !canLike;
+  lb.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7.5-4.6-10-9.3C.3 8.4 2.2 4 6.3 4c2.3 0 3.9 1.3 5.7 3.4C13.8 5.3 15.4 4 17.7 4 21.8 4 23.7 8.4 22 11.7 19.5 16.4 12 21 12 21z"/></svg>${canLike ? (liked ? "공감 취소" : "공감") : "공감 마감"}`;
+  $("#likeInfo").innerHTML = `<div>이 제안에 <b>${n}</b>명이 공감합니다. ${cand ? "투표 후보가 되었어요!" : `투표 후보까지 <b>${st.threshold - n}</b>명 남았어요.`}</div><div class="progress"><b style="width:${Math.min(100, n / st.threshold * 100)}%"></b></div>`;
+  const box = $("#delBox");
+  const mine = S.name && p.author === S.name && st.phase === "propose";
+  if (!mine) box.innerHTML = "";
+  else if (!box.dataset.asking) {
+    box.innerHTML = `<button class="btn danger small" type="button" id="delBtn">내 제안 지우기</button>`;
+    $("#delBtn").onclick = () => {
+      box.dataset.asking = "1";
+      box.innerHTML = `<span class="confirm">정말 지울까요? <button class="btn danger small" type="button" id="delYes">지우기</button><button class="btn ghost small" type="button" id="delNo">취소</button></span>`;
+      $("#delNo").onclick = () => { delete box.dataset.asking; renderDetail(); };
+      $("#delYes").onclick = async () => {
+        delete box.dataset.asking;
+        if (await send({ action: "deleteProposal", pid: id }, "제안을 지웠어요.")) { S.detail = null; render(); }
+      };
+    };
+  }
+  const cs = S.data.comments.filter(c => c.pid === id).sort((a, b) => a.createdAt - b.createdAt);
+  $("#cList").innerHTML = cs.length ? cs.map(c => `<li><b>${esc(c.author)}</b><time>${formatTime(c.createdAt)}</time>${c.author === S.name ? ` <button class="link" type="button" data-delc="${esc(c.id)}">삭제</button>` : ""}<p>${esc(c.text)}</p></li>`).join("")
+    : `<li style="color:var(--muted)">아직 댓글이 없어요. 첫 의견을 남겨 보세요.</li>`;
+  document.querySelectorAll("[data-delc]").forEach(b => b.onclick = () => send({ action: "deleteComment", cid: b.dataset.delc }, "댓글을 지웠어요."));
+}
+
+function renderVote() {
+  const st = S.data.settings, cands = candidates(), mv = S.data.myVote;
+  if (S.picks === null) S.picks = mv ? mv.filter(x => byId(x)) : [];
+  let body;
+  if (st.phase === "propose") {
+    body = `<div class="notice"><b>아직 투표 전이에요.</b> 지금은 제안을 받고 공감을 모으는 기간이에요. 공감 <b>${st.threshold}개</b> 이상을 받은 제안이 투표에 올라가요.</div>
+    ${cands.length ? `<h3 style="margin:0 0 14px">지금까지 투표 후보 ${cands.length}건</h3><div class="grid">${cands.map(card).join("")}</div>`
+      : `<div class="empty"><strong>아직 투표 후보가 없어요</strong>마음에 드는 제안에 공감을 눌러 주세요.<br><a class="btn" href="#propose" style="display:inline-block;text-decoration:none;margin-top:16px">제안 보러 가기</a></div>`}`;
+  } else if (st.phase === "result") {
+    body = `<div class="notice"><b>투표가 끝났어요.</b> 모두 ${S.data.voters}명이 투표에 참여했어요.</div><a class="btn" href="#result" style="display:inline-block;text-decoration:none">결과 보러 가기</a>`;
+  } else if (!cands.length) {
+    body = `<div class="empty"><strong>투표할 후보가 없어요</strong>공감 ${st.threshold}개 이상을 받은 제안이 없어요. 선생님께 알려 주세요.</div>`;
+  } else {
+    body = `<div class="notice"><b>투표 진행 중</b> · 한 사람이 <b>${st.voteMax}개</b>까지 고를 수 있어요. 누가 무엇을 골랐는지는 아무도 볼 수 없는 <b>비밀 투표</b>예요. ${mv ? "이미 투표했어요. 마감 전까지는 다시 고를 수 있어요." : ""}</div>
+    <div class="grid">${cands.map(p => `<div class="card vote-card" role="button" tabindex="0" data-pick="${esc(p.id)}" aria-pressed="${S.picks.includes(p.id)}">
+      <span class="check" aria-hidden="true">✓</span><span class="pill cand">투표 후보</span>
+      <h3>[${esc(p.category)}] ${esc(p.title)}</h3><p><span class="dong">${esc(p.dong)}</span>${esc(p.body)}</p>
+      <div class="meta"><span>${HEART_SVG}${p.likes}</span><button class="link" type="button" data-open="${esc(p.id)}">자세히 보기</button></div></div>`).join("")}</div>
+    <div class="vote-bar"><span><b>${S.picks.length}</b> / ${st.voteMax}개 골랐어요 · 지금까지 <b>${S.data.voters}</b>명 참여</span>
+      <button class="btn" type="button" id="voteBtn" ${S.picks.length ? "" : "disabled"}>${mv ? "다시 투표하기" : "투표하기"}</button></div>`;
+  }
+  $("#view").innerHTML = `<section class="band"><div class="wrap"><h1>투표</h1>
+    <div class="band-row"><div><h2>${esc(R)}에 꼭 필요한 제안을 골라 주세요.</h2><p>가장 많은 표를 받은 제안이 ${esc(R)}에 전할 우리의 제안으로 뽑혀요.</p></div></div></div></section>
+    <main class="wrap">${body}</main>`;
+  document.querySelectorAll("[data-pick]").forEach(c => {
+    const f = e => {
+      if (e.target.closest("[data-open]")) return;
+      if (e.type === "keydown" && e.key !== " " && e.key !== "Enter") return;
+      e.preventDefault();
+      const id = c.dataset.pick;
+      if (S.picks.includes(id)) S.picks = S.picks.filter(x => x !== id);
+      else if (st.voteMax === 1) S.picks = [id];
+      else if (S.picks.length >= st.voteMax) return toast(`${st.voteMax}개까지만 고를 수 있어요.`);
+      else S.picks = S.picks.concat(id);
+      renderVote();
+      const again = document.querySelector(`[data-pick="${CSS.escape(id)}"]`);
+      if (again) again.focus();
+    };
+    c.onclick = f; c.onkeydown = f;
+  });
+  bindOpen();
+  const vb = $("#voteBtn");
+  if (vb) vb.onclick = async () => {
+    vb.disabled = true;
+    const ok = await send({ action: "vote", picks: S.picks }, "투표했어요! 참여해 줘서 고마워요.");
+    if (ok) { S.picks = null; render(); } else vb.disabled = false;
+  };
+}
+
+function renderResult() {
+  const st = S.data.settings, voters = S.data.voters;
+  let body;
+  if (!S.data.results) {
+    body = `<div class="empty"><strong>결과는 투표가 끝나면 공개돼요</strong>${st.phase === "vote"
+      ? `지금까지 ${voters}명이 투표했어요. 아직 투표하지 않았다면 투표에 참여해 주세요.<br><a class="btn" href="#vote" style="display:inline-block;text-decoration:none;margin-top:16px">투표하러 가기</a>`
+      : "지금은 제안을 받는 기간이에요."}</div>`;
+  } else {
+    const list = rankProposals(S.data), max = Math.max(1, ...list.map(r => r.v));
+    body = !list.length ? `<div class="empty"><strong>투표 후보가 없었어요</strong>공감을 기준 수만큼 받은 제안이 없었어요.</div>` : `
+    <div class="stats" style="margin:0 0 22px"><div><span>투표 참여</span><strong>${voters}</strong><em>명</em></div><div><span>투표 후보</span><strong>${list.length}</strong><em>건</em></div><div><span>총 표 수</span><strong>${list.reduce((s, r) => s + r.v, 0)}</strong><em>표</em></div></div>
+    <div class="podium">${list.map(r => {
+      const win = r.rank === 1 && r.v > 0, pct = voters ? Math.round(r.v / voters * 100) : 0;
+      return `<div class="res ${win ? "win" : ""}"><div class="rank">${r.rank}위</div>
+      <div style="min-width:0">${win ? '<span class="pill win" style="margin-bottom:6px">선정</span>' : ""}<h3>[${esc(r.p.category)}] ${esc(r.p.title)} <span class="dong">${esc(r.p.dong)}</span></h3><div class="bar"><b style="width:${r.v / max * 100}%"></b></div></div>
+      <div class="num"><strong>${r.v}</strong>표<span>참여자의 ${pct}%</span></div></div>`;
+    }).join("")}</div>`;
+  }
+  $("#view").innerHTML = `<section class="band"><div class="wrap"><h1>결과</h1>
+    <div class="band-row"><div><h2>${st.phase === "result" ? `우리가 함께 고른 ${esc(R)} 제안이에요.` : "투표 결과를 기다리고 있어요."}</h2><p>뽑힌 제안은 ${esc(R)}에 전할 우리의 목소리가 돼요.</p></div></div></div></section>
+    <main class="wrap">${body}</main>`;
+}
+
+/* ---------- 창 ---------- */
+function modal(html, onMount) {
+  $("#modalRoot").innerHTML = `<div class="overlay" id="ov"><div class="modal" role="dialog" aria-modal="true">${html}</div></div>`;
+  const close = () => { $("#modalRoot").innerHTML = ""; };
+  $("#ov").onclick = e => { if (e.target.id === "ov") close(); };
+  $("#ov").onkeydown = e => { if (e.key === "Escape") close(); };
+  document.querySelectorAll("[data-close]").forEach(b => b.onclick = close);
+  onMount(close);
+  const first = $("#ov").querySelector("input,textarea,select");
+  if (first) first.focus();
+}
+function openJoin(msg) {
+  const needCode = S.data && S.data.needCode;
+  modal(`<h2>참여하기</h2><form id="nf">
+    ${needCode ? `<div class="field"><label for="codeIn">참여 코드</label><input id="codeIn" inputmode="numeric" maxlength="20" value="${esc(S.code)}" autocomplete="off" placeholder="선생님이 알려 준 코드"></div>` : ""}
+    <div class="field"><label for="nameIn">이름(번호와 이름)</label>
+    <input id="nameIn" maxlength="20" value="${esc(S.name)}" placeholder="예: 12번 김하늘" autocomplete="off">
+    <small>공감과 투표는 이름 하나당 한 번씩 세요. 친구 이름으로 참여하지 않기로 약속해요.</small></div>
+    <div class="err" id="nErr">${esc(msg || "")}</div>
+    <div class="right"><button class="btn ghost" type="button" data-close>취소</button><button class="btn" type="submit" id="nOk">확인</button></div></form>`, close => {
+    $("#nf").onsubmit = async e => {
+      e.preventDefault();
+      const v = $("#nameIn").value.trim(), code = needCode ? $("#codeIn").value.trim() : "";
+      if (needCode && !code) { $("#nErr").textContent = "참여 코드를 적어 주세요."; return; }
+      if (!v) { $("#nErr").textContent = "이름을 적어 주세요."; return; }
+      if (needCode) {
+        $("#nOk").disabled = true;
+        let r;
+        try { r = await Api.call({ action: "checkCode", code }); } catch (err) { r = { ok: false, error: "인터넷 연결을 확인해 주세요." }; }
+        $("#nOk").disabled = false;
+        if (!r.ok) { $("#nErr").textContent = r.error; return; }
+      }
+      S.name = v; S.code = code; lsSet("ep-name", v); lsSet("ep-code", code); S.picks = null;
+      close(); toast(`${v} 님, 환영해요!`); refresh();
+    };
+  });
+}
+function openNew() {
+  if (!S.name) return openJoin();
+  let draft = {};
+  try { draft = JSON.parse(sessionStorage.getItem("ep-draft")) || {}; } catch (e) {}
+  modal(`<h2>제안 등록하기</h2>
+    <ul class="rules">${CFG.proposalRules.map(r => `<li>${esc(r)}</li>`).join("")}</ul>
+    <form id="pf">
+    <div class="field"><label for="pDong">어느 동에 대한 제안인가요?</label><select id="pDong"><option value="">동을 골라 주세요</option>${CFG.dongs.map(c => `<option ${draft.dong === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>
+    <div class="field"><label for="pCat">분류</label><select id="pCat">${CFG.categories.map(c => `<option ${draft.category === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>
+    <div class="field"><label for="pTitle">제목</label><input id="pTitle" maxlength="40" value="${esc(draft.title)}" placeholder="예: 학교 앞 횡단보도에 노란 발자국을 그려 주세요"></div>
+    <div class="field"><label for="pBody">내용</label><textarea id="pBody" maxlength="800" placeholder="어디에서, 무엇이 문제인지, 어떻게 바뀌면 좋을지, 왜 그렇게 생각하는지 적어 주세요.">${esc(draft.body)}</textarea></div>
+    <div class="field"><small>작성자: <b>${esc(S.name)}</b></small></div>
+    <div class="err" id="pErr"></div>
+    <div class="right"><button class="btn ghost" type="button" data-close>취소</button><button class="btn" type="submit" id="pSubmit">등록하기</button></div></form>`, close => {
+    const saveDraft = () => { try { sessionStorage.setItem("ep-draft", JSON.stringify({ dong: $("#pDong").value, category: $("#pCat").value, title: $("#pTitle").value, body: $("#pBody").value })); } catch (e) {} };
+    ["pDong", "pCat", "pTitle", "pBody"].forEach(i => { $("#" + i).oninput = saveDraft; $("#" + i).onchange = saveDraft; });
+    $("#pf").onsubmit = async e => {
+      e.preventDefault();
+      const t = $("#pTitle").value.trim(), b = $("#pBody").value.trim(), dong = $("#pDong").value;
+      if (!dong) { $("#pErr").textContent = `${R}의 어느 동에 대한 제안인지 골라 주세요.`; return; }
+      if (!t || !b) { $("#pErr").textContent = "제목과 내용을 모두 적어 주세요."; return; }
+      $("#pSubmit").disabled = true;
+      const ok = await send({ action: "propose", dong, category: $("#pCat").value, title: t, body: b }, "제안을 올렸어요!");
+      if ($("#pSubmit")) $("#pSubmit").disabled = false;
+      if (ok) { try { sessionStorage.removeItem("ep-draft"); } catch (e) {} close(); }
+    };
+  });
+}
+
+const h = location.hash.slice(1);
+if (["propose", "vote", "result"].includes(h)) S.tab = h;
+refresh();
+startPolling(refresh);
+</script>
+</body>
+</html>
