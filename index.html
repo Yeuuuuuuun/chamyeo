@@ -76,7 +76,7 @@ async function send(body, okMsg) {
     if (okMsg) toast(okMsg);
     return r;
   } catch (e) {
-    toast("저장하지 못했어요. 인터넷 연결을 확인해 주세요.");
+    toast("저장하지 못했어요: " + e.message);
     return false;
   } finally {
     S.busy = false;

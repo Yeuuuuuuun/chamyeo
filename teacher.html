@@ -64,7 +64,7 @@ async function act(body, okMsg) {
     const r = await Api.call(Object.assign({ pw: T.pw }, body));
     if (!r.ok) toast(r.error || "저장하지 못했어요.");
     else if (okMsg) toast(okMsg);
-  } catch (e) { toast("저장하지 못했어요. 인터넷 연결을 확인해 주세요."); }
+  } catch (e) { toast("저장하지 못했어요: " + e.message); }
   T.phase = null;
   await refresh();
 }

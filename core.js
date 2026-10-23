@@ -3,7 +3,7 @@
 const CORE_PHASES = ["propose", "vote", "result"];
 const CORE_DEFAULTS = { phase: "propose", threshold: 5, voteMax: 1 };
 // 서버(Code.gs)와 사이트가 같은 버전인지 확인하는 번호. 규칙을 바꿀 때마다 1씩 올려요.
-const CORE_VERSION = 4;
+const CORE_VERSION = 5;
 const CORE_MAX_IMAGES = 3; // 제안 하나에 붙일 수 있는 사진 수
 
 function core_clean(s, max) {

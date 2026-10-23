@@ -141,7 +141,13 @@ function doGet() {
   return json_({ ok: true, message: '참여마당 서버가 동작 중이에요.' });
 }
 
+// 어떤 오류가 나도 화면이 읽을 수 있는 답을 보내요 (오류 내용이 학생 화면에 보여요)
 function doPost(e) {
+  try { return doPost_(e); }
+  catch (err) { return json_({ ok: false, error: '서버 오류: ' + (err && err.message ? err.message : err) }); }
+}
+
+function doPost_(e) {
   let b;
   try { b = JSON.parse(e.postData.contents); } catch (err) { return json_({ ok: false, error: '요청을 읽지 못했어요.' }); }
   const isTeacher = !!b.pw && String(b.pw) === TEACHER_PASSWORD;
@@ -179,7 +185,10 @@ function doPost(e) {
   }
 
   const lock = LockService.getScriptLock();
-  lock.waitLock(15000);
+  if (!lock.tryLock(20000)) {
+    trashImages_(saved);
+    return json_({ ok: false, error: '친구들이 한꺼번에 저장하고 있어요. 잠시 뒤 다시 눌러 주세요.' });
+  }
   try {
     const db = loadFromSheets_(); // 쓰기 전에는 항상 시트에서 새로 읽어요
     const gone = b.action === 'deleteProposal' ? ((db.proposals.find(p => p.id === b.pid) || {}).images || []) : [];
@@ -233,7 +242,7 @@ function addSampleProposals() {
 const CORE_PHASES = ["propose", "vote", "result"];
 const CORE_DEFAULTS = { phase: "propose", threshold: 5, voteMax: 1 };
 // 서버(Code.gs)와 사이트가 같은 버전인지 확인하는 번호. 규칙을 바꿀 때마다 1씩 올려요.
-const CORE_VERSION = 4;
+const CORE_VERSION = 5;
 const CORE_MAX_IMAGES = 3; // 제안 하나에 붙일 수 있는 사진 수
 
 function core_clean(s, max) {

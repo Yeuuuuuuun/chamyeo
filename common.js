@@ -21,7 +21,7 @@ function toast(msg) {
   let t = document.getElementById("toast");
   if (!t) { t = document.createElement("div"); t.id = "toast"; t.className = "toast"; document.body.appendChild(t); }
   t.textContent = msg; t.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 2800);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, msg.length > 30 ? 7000 : 2800);
 }
 
 const HEART_SVG = '<svg class="ico heart" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7.5-4.6-10-9.3C.3 8.4 2.2 4 6.3 4c2.3 0 3.9 1.3 5.7 3.4C13.8 5.3 15.4 4 17.7 4 21.8 4 23.7 8.4 22 11.7 19.5 16.4 12 21 12 21z"/></svg>';
@@ -70,12 +70,23 @@ const Api = {
   async call(body) {
     if (this.isLocal) return JSON.parse(JSON.stringify(LocalServer.handle(body)));
     // text/plain 으로 보내야 Apps Script 에서 막히지 않아요
-    const res = await fetch(CFG.apiUrl, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(body),
-    });
-    return res.json();
+    let res;
+    try {
+      res = await fetch(CFG.apiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(body),
+      });
+    } catch (e) {
+      throw new Error("서버에 연결하지 못했어요 (" + e.message + ")");
+    }
+    const text = await res.text();
+    try { return JSON.parse(text); }
+    catch (e) {
+      // 구글이 오류 화면(HTML)을 보낸 경우: 제목만 뽑아서 보여 줘요
+      const t = (text.match(/<title>([^<]*)<\/title>/i) || [])[1] || text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+      throw new Error("서버가 오류를 보냈어요 (" + res.status + (t ? ": " + t : "") + ")");
+    }
   },
 };
 
