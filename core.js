@@ -2,6 +2,7 @@
  * 고치면 apps-script/Code.gs 아래쪽의 같은 부분도 똑같이 고쳐 주세요. */
 const CORE_PHASES = ["propose", "vote", "result"];
 const CORE_DEFAULTS = { phase: "propose", threshold: 5, voteMax: 1 };
+const CORE_MAX_IMAGES = 3; // 제안 하나에 붙일 수 있는 사진 수
 
 function core_clean(s, max) {
   return String(s == null ? "" : s).replace(/[\u0000-\u0008\u000B-\u001F]/g, "").trim().slice(0, max);
@@ -45,6 +46,15 @@ function core_state(db, name, isTeacher, needCode, keyFn) {
   };
 }
 
+// 제안을 올리기 전에 미리 확인해요 (사진을 저장하기 전에 쓰려고요)
+function core_checkPropose(db, b) {
+  if (!core_clean(b.name, 20)) return "이름을 적어 주세요.";
+  if (db.settings.phase !== "propose") return "지금은 제안 기간이 아니에요.";
+  if (!core_clean(b.title, 40) || !core_clean(b.body, 800)) return "제목과 내용을 모두 적어 주세요.";
+  if (!core_clean(b.dong, 20)) return "제안할 동을 골라 주세요.";
+  return "";
+}
+
 // 요청 하나를 처리해요. 바뀐 표 이름을 touched 에 담아 돌려줘요.
 function core_apply(db, b, isTeacher, keyFn) {
   const s = db.settings;
@@ -56,13 +66,13 @@ function core_apply(db, b, isTeacher, keyFn) {
 
   switch (b.action) {
     case "propose": {
-      if (s.phase !== "propose") return fail("지금은 제안 기간이 아니에요.");
+      const bad = core_checkPropose(db, b);
+      if (bad) return fail(bad);
       const title = core_clean(b.title, 40), body = core_clean(b.body, 800);
       const dong = core_clean(b.dong, 20), category = core_clean(b.category, 20);
-      if (!title || !body) return fail("제목과 내용을 모두 적어 주세요.");
-      if (!dong) return fail("제안할 동을 골라 주세요.");
+      const images = (Array.isArray(b.images) ? b.images : []).filter(x => typeof x === "string" && x).slice(0, CORE_MAX_IMAGES);
       const id = "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      db.proposals.push({ id, category, dong, title, body, author: name, createdAt: Date.now() });
+      db.proposals.push({ id, category, dong, title, body, author: name, createdAt: Date.now(), images });
       return { ok: true, id, touched: ["proposals"] };
     }
     case "like": {

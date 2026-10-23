@@ -43,6 +43,7 @@ const R = CFG.regionName;
 const S = {
   data: null, name: lsGet("ep-name") || "", code: lsGet("ep-code") || "",
   tab: "propose", detail: null, q: "", cat: "all", dong: "all", status: "all", sort: "new", picks: null, busy: false,
+  writing: false, photos: [],
 };
 document.getElementById("brand").insertAdjacentHTML("afterbegin", BRAND_SVG);
 
@@ -83,8 +84,12 @@ async function send(body, okMsg) {
 }
 
 /* ---------- 화면 ---------- */
-function setTab(t) { S.tab = t; S.detail = null; S.picks = null; render(); scrollTo(0, 0); }
-addEventListener("hashchange", () => { const t = location.hash.slice(1); if (PHASE_NAMES[t] || t === "propose") setTab(t); });
+function setTab(t) {
+  S.writing = t === "write";
+  S.tab = S.writing ? "propose" : t; S.detail = null; S.picks = null;
+  render(); scrollTo(0, 0);
+}
+addEventListener("hashchange", () => { const t = location.hash.slice(1); if (PHASE_NAMES[t] || t === "propose" || t === "write") setTab(t); });
 document.querySelectorAll("nav.tabs a").forEach(a => a.addEventListener("click", e => {
   if (location.hash === "#" + a.dataset.tab) { e.preventDefault(); setTab(a.dataset.tab); }
 }));
@@ -105,6 +110,7 @@ function render() {
     ? `<span><b>${esc(S.name)}</b> 님으로 참여 중</span><button type="button" id="meBtn">이름 바꾸기</button>`
     : `<button type="button" id="meBtn">이름 적고 참여하기</button>`;
   $("#meBtn").onclick = () => openJoin();
+  if (S.writing) return renderWrite();
   if (S.detail && byId(S.detail)) return renderDetail();
   S.detail = null; detailBuiltFor = null;
   if (S.tab === "vote") return renderVote();
@@ -125,7 +131,7 @@ function card(p) {
     ${pillFor(p)}
     <h3>[${esc(p.category)}] ${esc(p.title)}</h3>
     <p><span class="dong">${esc(p.dong)}</span>${esc(p.body)}</p>
-    <div class="meta"><span>${HEART_SVG}${p.likes}</span><span>${BUBBLE_SVG}${p.comments}</span></div>
+    <div class="meta"><span>${HEART_SVG}${p.likes}</span><span>${BUBBLE_SVG}${p.comments}</span>${(p.images || []).length ? `<span title="첨부 사진">${CAMERA_SVG}${p.images.length}</span>` : ""}</div>
   </button>`;
 }
 function bindOpen() {
@@ -210,6 +216,7 @@ function renderDetail() {
     $("#view").innerHTML = `<section class="band"><div class="wrap"><h1>제안</h1><div class="stepper" id="dStep"></div></div></section>
     <main class="wrap" id="dRoot">
       <div id="dTop"></div>
+      <div class="photos" id="dPhotos"></div>
       <div class="like-row"><button class="btn like-btn" type="button" id="likeBtn"></button></div>
       <div class="right" style="padding-bottom:20px"><span id="delBox"></span><button class="btn ghost small" type="button" id="backBtn">목록보기</button></div>
       <div class="section"><h3>제안 동의</h3><div id="likeInfo"></div></div>
@@ -220,6 +227,10 @@ function renderDetail() {
       </div>
     </main>`;
     $("#backBtn").onclick = () => { S.detail = null; render(); };
+    const imgs = p.images || [];
+    $("#dPhotos").innerHTML = imgs.map((im, i) => `<div class="photo" data-img="${esc(im)}" data-alt="${esc(p.title)} 사진 ${i + 1}">사진 불러오는 중…</div>`).join("");
+    $("#dPhotos").hidden = !imgs.length;
+    fillImages($("#dPhotos"));
     $("#cText").oninput = e => { $("#cLen").textContent = `${e.target.value.length} / 300`; };
     $("#cBtn").onclick = async () => {
       const t = $("#cText").value.trim();
@@ -372,41 +383,90 @@ function openJoin(msg) {
         if (!r.ok) { $("#nErr").textContent = r.error; return; }
       }
       S.name = v; S.code = code; lsSet("ep-name", v); lsSet("ep-code", code); S.picks = null;
+      if (S.writing && $("#wRoot")) $("#wRoot").remove(); // 작성자 이름을 새로 보여 주려고 다시 그려요 (쓰던 글은 남아 있어요)
       close(); toast(`${v} 님, 환영해요!`); refresh();
     };
   });
 }
 function openNew() {
   if (!S.name) return openJoin();
+  if (location.hash === "#write") setTab("write"); else location.hash = "write";
+}
+
+/* 제안 등록: 팝업 대신 한 화면 전체를 써요. 새로고침이 와도 쓰던 내용은 그대로 둬요 */
+function renderWrite() {
+  const st = S.data.settings;
+  if ($("#wRoot")) return;
+  if (!S.name) { setTimeout(openJoin, 0); }
   let draft = {};
   try { draft = JSON.parse(sessionStorage.getItem("ep-draft")) || {}; } catch (e) {}
-  modal(`<h2>제안 등록하기</h2>
+  const open = st.phase === "propose";
+  $("#view").innerHTML = `<section class="band"><div class="wrap">
+    <h1>제안 등록</h1>
+    <div class="band-row"><div><h2>여러분의 제안으로 ${esc(R)}가 바뀝니다.</h2><p>어디에서, 무엇이 문제인지, 어떻게 바꾸면 좋을지 자세히 적어 주세요.</p></div></div>
+  </div></section>
+  <main class="wrap" id="wRoot">
+    ${!open ? `<div class="empty"><strong>지금은 제안 기간이 아니에요</strong>선생님이 제안 받기를 다시 열면 쓸 수 있어요.<br><a class="btn" href="#propose" style="display:inline-block;text-decoration:none;margin-top:16px">목록으로</a></div>` : `
     <ul class="rules">${CFG.proposalRules.map(r => `<li>${esc(r)}</li>`).join("")}</ul>
-    <form id="pf">
-    <div class="field"><label for="pDong">어느 동에 대한 제안인가요?</label><select id="pDong"><option value="">동을 골라 주세요</option>${CFG.dongs.map(c => `<option ${draft.dong === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>
-    <div class="field"><label for="pCat">분류</label><select id="pCat">${CFG.categories.map(c => `<option ${draft.category === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>
-    <div class="field"><label for="pTitle">제목</label><input id="pTitle" maxlength="40" value="${esc(draft.title)}" placeholder="예: 학교 앞 횡단보도에 노란 발자국을 그려 주세요"></div>
-    <div class="field"><label for="pBody">내용</label><textarea id="pBody" maxlength="800" placeholder="어디에서, 무엇이 문제인지, 어떻게 바뀌면 좋을지, 왜 그렇게 생각하는지 적어 주세요.">${esc(draft.body)}</textarea></div>
-    <div class="field"><small>작성자: <b>${esc(S.name)}</b></small></div>
-    <div class="err" id="pErr"></div>
-    <div class="right"><button class="btn ghost" type="button" data-close>취소</button><button class="btn" type="submit" id="pSubmit">등록하기</button></div></form>`, close => {
-    const saveDraft = () => { try { sessionStorage.setItem("ep-draft", JSON.stringify({ dong: $("#pDong").value, category: $("#pCat").value, title: $("#pTitle").value, body: $("#pBody").value })); } catch (e) {} };
-    ["pDong", "pCat", "pTitle", "pBody"].forEach(i => { $("#" + i).oninput = saveDraft; $("#" + i).onchange = saveDraft; });
-    $("#pf").onsubmit = async e => {
-      e.preventDefault();
-      const t = $("#pTitle").value.trim(), b = $("#pBody").value.trim(), dong = $("#pDong").value;
-      if (!dong) { $("#pErr").textContent = `${R}의 어느 동에 대한 제안인지 골라 주세요.`; return; }
-      if (!t || !b) { $("#pErr").textContent = "제목과 내용을 모두 적어 주세요."; return; }
-      $("#pSubmit").disabled = true;
-      const ok = await send({ action: "propose", dong, category: $("#pCat").value, title: t, body: b }, "제안을 올렸어요!");
-      if ($("#pSubmit")) $("#pSubmit").disabled = false;
-      if (ok) { try { sessionStorage.removeItem("ep-draft"); } catch (e) {} close(); }
-    };
-  });
+    <form id="pf" class="write-form">
+      <div class="write-row">
+        <div class="field"><label for="pDong">어느 동에 대한 제안인가요? <em class="req">필수</em></label><select id="pDong"><option value="">동을 골라 주세요</option>${CFG.dongs.map(c => `<option ${draft.dong === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>
+        <div class="field"><label for="pCat">분류</label><select id="pCat">${CFG.categories.map(c => `<option ${draft.category === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>
+      </div>
+      <div class="field"><label for="pTitle">제목 <em class="req">필수</em></label><input id="pTitle" class="big" maxlength="40" value="${esc(draft.title)}" placeholder="예: 학교 앞 횡단보도에 노란 발자국을 그려 주세요"><small id="tLen"></small></div>
+      <div class="field"><label for="pBody">내용 <em class="req">필수</em></label><textarea id="pBody" class="big-text" maxlength="800" placeholder="1. 어디에서 어떤 문제가 있나요?&#10;2. 어떻게 바뀌면 좋을까요?&#10;3. 왜 그렇게 생각하나요?">${esc(draft.body)}</textarea><small id="bLen"></small></div>
+      <div class="field"><label>사진 첨부 <small>(선택 · 최대 ${CORE_MAX_IMAGES}장)</small></label>
+        <div class="photos edit" id="pPhotos"></div>
+        <label class="uploader" id="upLabel" for="pFile">＋ 사진 고르기 / 찍기</label>
+        <input id="pFile" type="file" accept="image/*" multiple hidden>
+        <small>사진은 크기를 줄여서 올라가요. 사람 얼굴이나 자동차 번호판이 나오지 않게 찍어 주세요.</small></div>
+      <div class="field"><small>작성자: <b>${esc(S.name)}</b></small></div>
+      <div class="err" id="pErr"></div>
+      <div class="write-actions"><a class="btn ghost" href="#propose" style="text-decoration:none">취소</a><button class="btn" type="submit" id="pSubmit">제안 등록하기</button></div>
+    </form>`}
+  </main>`;
+  if (!open) return;
+  const counts = () => { $("#tLen").textContent = `${$("#pTitle").value.length} / 40`; $("#bLen").textContent = `${$("#pBody").value.length} / 800`; };
+  const saveDraft = () => { counts(); try { sessionStorage.setItem("ep-draft", JSON.stringify({ dong: $("#pDong").value, category: $("#pCat").value, title: $("#pTitle").value, body: $("#pBody").value })); } catch (e) {} };
+  ["pDong", "pCat", "pTitle", "pBody"].forEach(i => { $("#" + i).oninput = saveDraft; $("#" + i).onchange = saveDraft; });
+  counts();
+  const drawPhotos = () => {
+    $("#pPhotos").innerHTML = S.photos.map((src, i) => `<div class="photo ready"><img src="${src}" alt="첨부할 사진 ${i + 1}"><button type="button" class="photo-del" data-del="${i}" aria-label="사진 ${i + 1} 빼기">✕</button></div>`).join("");
+    $("#pPhotos").hidden = !S.photos.length;
+    $("#upLabel").hidden = S.photos.length >= CORE_MAX_IMAGES;
+    document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => { S.photos.splice(+b.dataset.del, 1); drawPhotos(); });
+  };
+  drawPhotos();
+  $("#pFile").onchange = async e => {
+    const files = [...e.target.files].filter(f => f.type.startsWith("image/") || !f.type);
+    e.target.value = "";
+    const room = CORE_MAX_IMAGES - S.photos.length;
+    if (files.length > room) toast(`사진은 ${CORE_MAX_IMAGES}장까지 붙일 수 있어요.`);
+    for (const f of files.slice(0, room)) {
+      try { S.photos.push(await resizeImage(f)); } catch (err) { toast(err.message); }
+    }
+    drawPhotos();
+  };
+  $("#pf").onsubmit = async e => {
+    e.preventDefault();
+    const t = $("#pTitle").value.trim(), b = $("#pBody").value.trim(), dong = $("#pDong").value;
+    if (!dong) { $("#pErr").textContent = `${R}의 어느 동에 대한 제안인지 골라 주세요.`; $("#pDong").focus(); return; }
+    if (!t) { $("#pErr").textContent = "제목을 적어 주세요."; $("#pTitle").focus(); return; }
+    if (!b) { $("#pErr").textContent = "내용을 적어 주세요."; $("#pBody").focus(); return; }
+    const btn = $("#pSubmit");
+    btn.disabled = true; btn.textContent = S.photos.length ? "사진과 함께 올리는 중…" : "올리는 중…";
+    const ok = await send({ action: "propose", dong, category: $("#pCat").value, title: t, body: b, images: S.photos }, "제안을 올렸어요!");
+    if (ok) {
+      try { sessionStorage.removeItem("ep-draft"); } catch (err) {}
+      S.photos = [];
+      location.hash = "propose";
+    } else if ($("#pSubmit")) { btn.disabled = false; btn.textContent = "제안 등록하기"; }
+  };
 }
 
 const h = location.hash.slice(1);
 if (["propose", "vote", "result"].includes(h)) S.tab = h;
+if (h === "write") S.writing = true;
 refresh();
 startPolling(refresh);
 </script>

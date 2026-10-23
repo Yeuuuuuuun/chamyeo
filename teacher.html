@@ -107,7 +107,7 @@ function render() {
     </div>
     <section class="panel">
       <h2>제안 관리</h2>
-      <p style="margin:-6px 0 12px;color:var(--muted);font-size:14px">${esc(CFG.regionName)}와 관계없는 제안이나 알맞지 않은 글은 지워 주세요. 지우면 그 제안의 공감과 댓글도 함께 지워져요.</p>
+      <p style="margin:-6px 0 12px;color:var(--muted);font-size:14px">${esc(CFG.regionName)}와 관계없는 제안이나 알맞지 않은 글·사진은 지워 주세요. 지우면 그 제안의 공감, 댓글, 사진도 함께 지워져요.</p>
       <div id="propList"></div>
     </section>
     <section class="panel">
@@ -141,10 +141,11 @@ function renderLists() {
 
   const props = d.proposals.slice().sort((a, b) => b.createdAt - a.createdAt);
   $("#propList").innerHTML = props.length ? `<div class="table-wrap"><table class="list"><thead><tr><th>동</th><th>분류</th><th>제목 · 내용</th><th>작성자</th><th>공감</th><th>댓글</th><th></th></tr></thead><tbody>
-    ${props.map(p => `<tr><td>${esc(p.dong)}</td><td>${esc(p.category)}</td><td><b>${esc(p.title)}</b><br><span style="color:var(--muted)">${esc(p.body)}</span></td>
+    ${props.map(p => `<tr><td>${esc(p.dong)}</td><td>${esc(p.category)}</td><td><b>${esc(p.title)}</b><br><span style="color:var(--muted)">${esc(p.body)}</span>${(p.images || []).length ? `<div class="t-photos">${p.images.map((im, i) => `<div class="photo" data-img="${esc(im)}" data-alt="${esc(p.title)} 사진 ${i + 1}">불러오는 중…</div>`).join("")}</div>` : ""}</td>
       <td>${esc(p.author)}<br><span class="refresh">${formatTime(p.createdAt)}</span></td><td class="n">${p.likes}</td><td class="n">${p.comments}</td>
       <td data-box="${esc(p.id)}"><button class="btn danger small" type="button" data-delp="${esc(p.id)}">지우기</button></td></tr>`).join("")}
     </tbody></table></div>` : `<div class="empty"><strong>아직 제안이 없어요</strong>학생 화면에서 제안이 올라오면 여기에 보여요.</div>`;
+  fillImages($("#propList"));
   document.querySelectorAll("[data-delp]").forEach(b => b.onclick = () => {
     const cell = b.parentElement, id = b.dataset.delp;
     cell.innerHTML = `<span class="confirm"><button class="btn danger small" type="button">정말 지우기</button><button class="link" type="button">취소</button></span>`;

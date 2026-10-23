@@ -10,14 +10,16 @@ const JOIN_CODE = '0000';          // 학생이 처음에 넣는 참여 코드 (
 const SALT = 'eunpyeong-' + 'change-me'; // 아무 글자로나 바꿔 두면 투표자 이름을 더 알아보기 어려워져요
 
 const TABLES = {
-  proposals: { sheet: '제안', cols: ['id', 'category', 'dong', 'title', 'body', 'author', 'createdAt'],
-    headers: ['번호', '분류', '동', '제목', '내용', '작성자', '작성 시각'] },
+  proposals: { sheet: '제안', cols: ['id', 'category', 'dong', 'title', 'body', 'author', 'createdAt', 'images'],
+    headers: ['번호', '분류', '동', '제목', '내용', '작성자', '작성 시각', '사진(드라이브 파일 ID)'] },
   likes: { sheet: '공감', cols: ['pid', 'name', 'at'], headers: ['제안 번호', '이름', '시각'] },
   comments: { sheet: '댓글', cols: ['id', 'pid', 'author', 'text', 'createdAt'],
     headers: ['번호', '제안 번호', '작성자', '내용', '작성 시각'] },
   votes: { sheet: '투표', cols: ['key', 'picks', 'at'], headers: ['투표자(암호)', '고른 제안 번호', '시각'] },
 };
 const TIME_COLS = ['createdAt', 'at'];
+const JSON_COLS = ['picks', 'images'];
+const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 const CACHE_KEY = 'db-v1';
 
 function json_(obj) {
@@ -45,7 +47,7 @@ function loadFromSheets_() {
       T.cols.forEach((c, i) => {
         let v = r[i];
         if (TIME_COLS.indexOf(c) >= 0) v = v instanceof Date ? v.getTime() : Number(v) || 0;
-        else if (c === 'picks') { try { v = JSON.parse(v); } catch (e) { v = []; } }
+        else if (JSON_COLS.indexOf(c) >= 0) { try { v = JSON.parse(v) || []; } catch (e) { v = []; } }
         else v = String(v);
         o[c] = v;
       });
@@ -76,7 +78,7 @@ function save_(db, touched) {
     const sh = sheet_(T.sheet, T.headers);
     sh.clearContents();
     const rows = [T.headers].concat(db[t].map(o => T.cols.map(c =>
-      TIME_COLS.indexOf(c) >= 0 ? new Date(o[c]) : c === 'picks' ? JSON.stringify(o[c]) : String(o[c]))));
+      TIME_COLS.indexOf(c) >= 0 ? new Date(o[c]) : JSON_COLS.indexOf(c) >= 0 ? JSON.stringify(o[c] || []) : String(o[c]))));
     T.cols.forEach((c, i) => {
       if (TIME_COLS.indexOf(c) < 0) sh.getRange(1, i + 1, rows.length, 1).setNumberFormat('@');
     });
@@ -103,6 +105,38 @@ function key_(name) {
   return 'v' + bytes.slice(0, 10).map(b => ((b + 256) % 256).toString(16).padStart(2, '0')).join('');
 }
 
+/* ---------- 사진: 선생님 구글 드라이브의 '참여마당 사진' 폴더에 저장 ---------- */
+function photoFolder_() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('PHOTO_FOLDER');
+  if (id) { try { return DriveApp.getFolderById(id); } catch (e) {} }
+  const f = DriveApp.createFolder('참여마당 사진');
+  props.setProperty('PHOTO_FOLDER', f.getId());
+  return f;
+}
+function saveImages_(list) {
+  if (!Array.isArray(list) || !list.length) return [];
+  const folder = photoFolder_();
+  return list.slice(0, CORE_MAX_IMAGES).map((d, i) => {
+    const m = /^data:(image\/(?:jpeg|png|webp));base64,(.+)$/.exec(String(d));
+    if (!m) throw new Error('사진 형식이 올바르지 않아요.');
+    const bytes = Utilities.base64Decode(m[2]);
+    if (bytes.length > MAX_IMAGE_BYTES) throw new Error('사진이 너무 커요.');
+    const ext = m[1].split('/')[1].replace('jpeg', 'jpg');
+    return folder.createFile(Utilities.newBlob(bytes, m[1], 'photo-' + Date.now() + '-' + i + '.' + ext)).getId();
+  });
+}
+function trashImages_(ids) {
+  (ids || []).forEach(id => { try { DriveApp.getFileById(id).setTrashed(true); } catch (e) {} });
+}
+// 사진은 제안에 붙어 있는 것만 보여 줘요 (드라이브의 다른 파일은 절대 열지 않아요)
+function imageData_(id) {
+  const db = load_();
+  if (!db.proposals.some(p => (p.images || []).indexOf(id) >= 0)) return { ok: false, error: '사진을 찾을 수 없어요.' };
+  const blob = DriveApp.getFileById(id).getBlob();
+  return { ok: true, data: 'data:' + blob.getContentType() + ';base64,' + Utilities.base64Encode(blob.getBytes()) };
+}
+
 function doGet() {
   return json_({ ok: true, message: '참여마당 서버가 동작 중이에요.' });
 }
@@ -116,19 +150,37 @@ function doPost(e) {
   if (b.action === 'state') {
     return json_(core_state(load_(), core_clean(b.name, 20), isTeacher, JOIN_CODE !== '', key_));
   }
+  if (b.action === 'image') {
+    try { return json_(imageData_(String(b.id || ''))); }
+    catch (err) { return json_({ ok: false, error: '사진을 불러오지 못했어요.' }); }
+  }
   if (!isTeacher && JOIN_CODE !== '' && String(b.code || '') !== JOIN_CODE) {
     return json_({ ok: false, error: '참여 코드가 맞지 않아요.', code: 'badcode' });
   }
   if (b.action === 'checkCode') return json_({ ok: true });
 
+  // 사진은 시간이 걸려서, 먼저 확인하고 드라이브에 저장한 뒤 제안을 기록해요
+  let saved = [];
+  if (b.action === 'propose') {
+    const bad = core_checkPropose(load_(), b);
+    if (bad) return json_({ ok: false, error: bad });
+    try { saved = saveImages_(b.images); }
+    catch (err) { return json_({ ok: false, error: String(err.message || err) }); }
+    b.images = saved;
+  }
+
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
     const db = loadFromSheets_(); // 쓰기 전에는 항상 시트에서 새로 읽어요
+    const gone = b.action === 'deleteProposal' ? ((db.proposals.find(p => p.id === b.pid) || {}).images || []) : [];
     const res = core_apply(db, b, isTeacher, key_);
     if (res.ok && res.touched && res.touched.length) save_(db, res.touched);
+    if (!res.ok) trashImages_(saved);
+    if (res.ok && gone.length) trashImages_(gone);
     return json_(res);
   } catch (err) {
+    trashImages_(saved);
     return json_({ ok: false, error: '저장 중 문제가 생겼어요: ' + err });
   } finally {
     lock.releaseLock();
@@ -170,6 +222,7 @@ function addSampleProposals() {
  * 고치면 apps-script/Code.gs 아래쪽의 같은 부분도 똑같이 고쳐 주세요. */
 const CORE_PHASES = ["propose", "vote", "result"];
 const CORE_DEFAULTS = { phase: "propose", threshold: 5, voteMax: 1 };
+const CORE_MAX_IMAGES = 3; // 제안 하나에 붙일 수 있는 사진 수
 
 function core_clean(s, max) {
   return String(s == null ? "" : s).replace(/[\u0000-\u0008\u000B-\u001F]/g, "").trim().slice(0, max);
@@ -213,6 +266,15 @@ function core_state(db, name, isTeacher, needCode, keyFn) {
   };
 }
 
+// 제안을 올리기 전에 미리 확인해요 (사진을 저장하기 전에 쓰려고요)
+function core_checkPropose(db, b) {
+  if (!core_clean(b.name, 20)) return "이름을 적어 주세요.";
+  if (db.settings.phase !== "propose") return "지금은 제안 기간이 아니에요.";
+  if (!core_clean(b.title, 40) || !core_clean(b.body, 800)) return "제목과 내용을 모두 적어 주세요.";
+  if (!core_clean(b.dong, 20)) return "제안할 동을 골라 주세요.";
+  return "";
+}
+
 // 요청 하나를 처리해요. 바뀐 표 이름을 touched 에 담아 돌려줘요.
 function core_apply(db, b, isTeacher, keyFn) {
   const s = db.settings;
@@ -224,13 +286,13 @@ function core_apply(db, b, isTeacher, keyFn) {
 
   switch (b.action) {
     case "propose": {
-      if (s.phase !== "propose") return fail("지금은 제안 기간이 아니에요.");
+      const bad = core_checkPropose(db, b);
+      if (bad) return fail(bad);
       const title = core_clean(b.title, 40), body = core_clean(b.body, 800);
       const dong = core_clean(b.dong, 20), category = core_clean(b.category, 20);
-      if (!title || !body) return fail("제목과 내용을 모두 적어 주세요.");
-      if (!dong) return fail("제안할 동을 골라 주세요.");
+      const images = (Array.isArray(b.images) ? b.images : []).filter(x => typeof x === "string" && x).slice(0, CORE_MAX_IMAGES);
       const id = "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      db.proposals.push({ id, category, dong, title, body, author: name, createdAt: Date.now() });
+      db.proposals.push({ id, category, dong, title, body, author: name, createdAt: Date.now(), images });
       return { ok: true, id, touched: ["proposals"] };
     }
     case "like": {
