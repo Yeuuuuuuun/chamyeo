@@ -43,7 +43,7 @@ const R = CFG.regionName;
 const S = {
   data: null, name: lsGet("ep-name") || "", code: lsGet("ep-code") || "",
   tab: "propose", detail: null, q: "", cat: "all", dong: "all", status: "all", sort: "new", picks: null, busy: false,
-  writing: false, photos: [],
+  writing: false, editId: null, photos: [], keep: [],
 };
 document.getElementById("brand").insertAdjacentHTML("afterbegin", BRAND_SVG);
 
@@ -85,11 +85,12 @@ async function send(body, okMsg) {
 
 /* ---------- 화면 ---------- */
 function setTab(t) {
-  S.writing = t === "write";
+  S.editId = t.startsWith("edit-") ? t.slice(5) : null;
+  S.writing = t === "write" || !!S.editId;
   S.tab = S.writing ? "propose" : t; S.detail = null; S.picks = null;
   render(); scrollTo(0, 0);
 }
-addEventListener("hashchange", () => { const t = location.hash.slice(1); if (PHASE_NAMES[t] || t === "propose" || t === "write") setTab(t); });
+addEventListener("hashchange", () => { const t = location.hash.slice(1); if (PHASE_NAMES[t] || t === "propose" || t === "write" || t.startsWith("edit-")) setTab(t); });
 document.querySelectorAll("nav.tabs a").forEach(a => a.addEventListener("click", e => {
   if (location.hash === "#" + a.dataset.tab) { e.preventDefault(); setTab(a.dataset.tab); }
 }));
@@ -211,8 +212,9 @@ function renderPropose() {
 let detailBuiltFor = null;
 function renderDetail() {
   const id = S.detail, p = byId(id), st = S.data.settings, n = p.likes, cand = n >= st.threshold;
-  if (detailBuiltFor !== id || !$("#dRoot")) {
-    detailBuiltFor = id;
+  const imgKey = id + "|" + (p.images || []).join(",");
+  if (detailBuiltFor !== imgKey || !$("#dRoot")) {
+    detailBuiltFor = imgKey;
     $("#view").innerHTML = `<section class="band"><div class="wrap"><h1>제안</h1><div class="stepper" id="dStep"></div></div></section>
     <main class="wrap" id="dRoot">
       <div id="dTop"></div>
@@ -250,7 +252,7 @@ function renderDetail() {
   if (cand && st.phase === "result") cur = 3;
   $("#dStep").innerHTML = steps.map((s, i) => `<div class="${i < cur || (cand && i === 1) ? "past" : ""} ${i === cur && !(cand && i === 1) ? "on" : ""}">${s}</div>`).join("");
   $("#dTop").innerHTML = `<div class="d-head"><div>${pillFor(p)}<h1>[${esc(p.category)}] ${esc(p.title)}</h1></div></div>
-    <div class="d-meta"><span><b>장소</b> ${esc(R)} ${esc(p.dong)} &nbsp; <b>작성자</b> ${esc(p.author)}</span><span>${formatTime(p.createdAt)}</span></div>
+    <div class="d-meta"><span><b>장소</b> ${esc(R)} ${esc(p.dong)} &nbsp; <b>작성자</b> ${esc(p.author)}</span><span>${formatTime(p.createdAt)}${p.editedAt ? ` · 수정됨 ${formatTime(p.editedAt)}` : ""}</span></div>
     <div class="d-body">${esc(p.body)}</div><span class="tag">#${esc(p.category)}</span><span class="tag" style="margin-left:0">#${esc(p.dong)}</span>`;
   const liked = S.data.myLikes.includes(id), canLike = st.phase === "propose";
   const lb = $("#likeBtn");
@@ -261,7 +263,7 @@ function renderDetail() {
   const mine = S.name && p.author === S.name && st.phase === "propose";
   if (!mine) box.innerHTML = "";
   else if (!box.dataset.asking) {
-    box.innerHTML = `<button class="btn danger small" type="button" id="delBtn">내 제안 지우기</button>`;
+    box.innerHTML = `<a class="btn ghost small" href="#edit-${esc(id)}" style="text-decoration:none">내 제안 고치기</a> <button class="btn danger small" type="button" id="delBtn">내 제안 지우기</button>`;
     $("#delBtn").onclick = () => {
       box.dataset.asking = "1";
       box.innerHTML = `<span class="confirm">정말 지울까요? <button class="btn danger small" type="button" id="delYes">지우기</button><button class="btn ghost small" type="button" id="delNo">취소</button></span>`;
@@ -393,20 +395,31 @@ function openNew() {
   if (location.hash === "#write") setTab("write"); else location.hash = "write";
 }
 
+// 고치기를 마치거나 취소하면 그 제안 화면으로 돌아가요
+function backToDetail(id) {
+  history.replaceState(null, "", "#propose");
+  S.writing = false; S.editId = null; S.tab = "propose"; S.detail = id;
+  render(); scrollTo(0, 0);
+}
+
 /* 제안 등록: 팝업 대신 한 화면 전체를 써요. 새로고침이 와도 쓰던 내용은 그대로 둬요 */
 function renderWrite() {
   const st = S.data.settings;
   if ($("#wRoot")) return;
   if (!S.name) { setTimeout(openJoin, 0); }
+  const editing = S.editId ? byId(S.editId) : null;
+  if (S.editId && !editing) { location.hash = "propose"; return; }
   let draft = {};
-  try { draft = JSON.parse(sessionStorage.getItem("ep-draft")) || {}; } catch (e) {}
-  const open = st.phase === "propose";
+  if (editing) { draft = editing; S.keep = (editing.images || []).slice(); S.photos = []; }
+  else { S.keep = []; try { draft = JSON.parse(sessionStorage.getItem("ep-draft")) || {}; } catch (e) {} }
+  const notMine = editing && editing.author !== S.name;
+  const open = st.phase === "propose" && !notMine;
   $("#view").innerHTML = `<section class="band"><div class="wrap">
-    <h1>제안 등록</h1>
-    <div class="band-row"><div><h2>여러분의 제안으로 ${esc(R)}가 바뀝니다.</h2><p>어디에서, 무엇이 문제인지, 어떻게 바꾸면 좋을지 자세히 적어 주세요.</p></div></div>
+    <h1>${editing ? "제안 고치기" : "제안 등록"}</h1>
+    <div class="band-row"><div><h2>여러분의 제안으로 ${esc(R)}가 바뀝니다.</h2><p>${editing ? "고친 내용은 바로 모두에게 보여요. 이미 받은 공감과 댓글은 그대로 남아요." : "어디에서, 무엇이 문제인지, 어떻게 바꾸면 좋을지 자세히 적어 주세요."}</p></div></div>
   </div></section>
   <main class="wrap" id="wRoot">
-    ${!open ? `<div class="empty"><strong>지금은 제안 기간이 아니에요</strong>선생님이 제안 받기를 다시 열면 쓸 수 있어요.<br><a class="btn" href="#propose" style="display:inline-block;text-decoration:none;margin-top:16px">목록으로</a></div>` : `
+    ${!open ? `<div class="empty"><strong>${notMine ? "내가 쓴 제안만 고칠 수 있어요" : editing ? "제안 기간이 끝나서 고칠 수 없어요" : "지금은 제안 기간이 아니에요"}</strong>${notMine ? "참여할 때 적은 이름이 이 제안의 작성자와 같아야 해요." : "선생님이 제안 받기를 다시 열면 쓸 수 있어요."}<br><a class="btn" href="#propose" style="display:inline-block;text-decoration:none;margin-top:16px">목록으로</a></div>` : `
     <ul class="rules">${CFG.proposalRules.map(r => `<li>${esc(r)}</li>`).join("")}</ul>
     <form id="pf" class="write-form">
       <div class="write-row">
@@ -422,25 +435,34 @@ function renderWrite() {
         <small>사진은 크기를 줄여서 올라가요. 사람 얼굴이나 자동차 번호판이 나오지 않게 찍어 주세요.</small></div>
       <div class="field"><small>작성자: <b>${esc(S.name)}</b></small></div>
       <div class="err" id="pErr"></div>
-      <div class="write-actions"><a class="btn ghost" href="#propose" style="text-decoration:none">취소</a><button class="btn" type="submit" id="pSubmit">제안 등록하기</button></div>
+      <div class="write-actions"><a class="btn ghost" href="#propose" id="pCancel" style="text-decoration:none">취소</a><button class="btn" type="submit" id="pSubmit">${editing ? "고친 내용 저장하기" : "제안 등록하기"}</button></div>
     </form>`}
   </main>`;
   if (!open) return;
   const counts = () => { $("#tLen").textContent = `${$("#pTitle").value.length} / 40`; $("#bLen").textContent = `${$("#pBody").value.length} / 800`; };
-  const saveDraft = () => { counts(); try { sessionStorage.setItem("ep-draft", JSON.stringify({ dong: $("#pDong").value, category: $("#pCat").value, title: $("#pTitle").value, body: $("#pBody").value })); } catch (e) {} };
+  if (editing) $("#pCancel").onclick = e => { e.preventDefault(); backToDetail(editing.id); };
+  const saveDraft = () => { counts(); if (editing) return; try { sessionStorage.setItem("ep-draft", JSON.stringify({ dong: $("#pDong").value, category: $("#pCat").value, title: $("#pTitle").value, body: $("#pBody").value })); } catch (e) {} };
   ["pDong", "pCat", "pTitle", "pBody"].forEach(i => { $("#" + i).oninput = saveDraft; $("#" + i).onchange = saveDraft; });
   counts();
   const drawPhotos = () => {
-    $("#pPhotos").innerHTML = S.photos.map((src, i) => `<div class="photo ready"><img src="${src}" alt="첨부할 사진 ${i + 1}"><button type="button" class="photo-del" data-del="${i}" aria-label="사진 ${i + 1} 빼기">✕</button></div>`).join("");
-    $("#pPhotos").hidden = !S.photos.length;
-    $("#upLabel").hidden = S.photos.length >= CORE_MAX_IMAGES;
+    const total = S.keep.length + S.photos.length;
+    $("#pPhotos").innerHTML = S.keep.map((im, i) => `<div class="photo" data-img="${esc(im)}">사진 불러오는 중…<button type="button" class="photo-del" data-delkeep="${i}" aria-label="원래 사진 ${i + 1} 빼기">✕</button></div>`).join("")
+      + S.photos.map((src, i) => `<div class="photo ready"><img src="${src}" alt="첨부할 사진 ${i + 1}"><button type="button" class="photo-del" data-del="${i}" aria-label="새 사진 ${i + 1} 빼기">✕</button></div>`).join("");
+    $("#pPhotos").hidden = !total;
+    $("#upLabel").hidden = total >= CORE_MAX_IMAGES;
+    // 원래 사진은 불러온 뒤에도 빼기 단추가 남도록 그림만 앞에 넣어요
+    $("#pPhotos").querySelectorAll("[data-img]").forEach(el => loadImage(el.dataset.img).then(src => {
+      const img = new Image(); img.src = src; img.alt = "원래 사진";
+      el.firstChild.nodeType === 3 && el.firstChild.remove(); el.prepend(img);
+    }).catch(() => { if (el.firstChild.nodeType === 3) el.firstChild.textContent = "사진을 불러오지 못했어요"; }));
     document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => { S.photos.splice(+b.dataset.del, 1); drawPhotos(); });
+    document.querySelectorAll("[data-delkeep]").forEach(b => b.onclick = () => { S.keep.splice(+b.dataset.delkeep, 1); drawPhotos(); });
   };
   drawPhotos();
   $("#pFile").onchange = async e => {
     const files = [...e.target.files].filter(f => f.type.startsWith("image/") || !f.type);
     e.target.value = "";
-    const room = CORE_MAX_IMAGES - S.photos.length;
+    const room = CORE_MAX_IMAGES - S.keep.length - S.photos.length;
     if (files.length > room) toast(`사진은 ${CORE_MAX_IMAGES}장까지 붙일 수 있어요.`);
     for (const f of files.slice(0, room)) {
       try { S.photos.push(await resizeImage(f)); } catch (err) { toast(err.message); }
@@ -454,7 +476,13 @@ function renderWrite() {
     if (!t) { $("#pErr").textContent = "제목을 적어 주세요."; $("#pTitle").focus(); return; }
     if (!b) { $("#pErr").textContent = "내용을 적어 주세요."; $("#pBody").focus(); return; }
     const btn = $("#pSubmit");
-    btn.disabled = true; btn.textContent = S.photos.length ? "사진과 함께 올리는 중…" : "올리는 중…";
+    btn.disabled = true; btn.textContent = S.photos.length ? "사진과 함께 올리는 중…" : editing ? "저장하는 중…" : "올리는 중…";
+    if (editing) {
+      const ok = await send({ action: "editProposal", pid: editing.id, dong, category: $("#pCat").value, title: t, body: b, keep: S.keep, images: S.photos }, "고친 내용을 저장했어요!");
+      if (ok) { S.photos = []; backToDetail(editing.id); }
+      else if ($("#pSubmit")) { btn.disabled = false; btn.textContent = "고친 내용 저장하기"; }
+      return;
+    }
     const ok = await send({ action: "propose", dong, category: $("#pCat").value, title: t, body: b, images: S.photos }, "제안을 올렸어요!");
     if (ok) {
       try { sessionStorage.removeItem("ep-draft"); } catch (err) {}
@@ -467,6 +495,7 @@ function renderWrite() {
 const h = location.hash.slice(1);
 if (["propose", "vote", "result"].includes(h)) S.tab = h;
 if (h === "write") S.writing = true;
+if (h.startsWith("edit-")) { S.writing = true; S.editId = h.slice(5); }
 refresh();
 startPolling(refresh);
 </script>

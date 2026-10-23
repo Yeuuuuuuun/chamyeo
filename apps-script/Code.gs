@@ -10,14 +10,14 @@ const JOIN_CODE = '0000';          // 학생이 처음에 넣는 참여 코드 (
 const SALT = 'eunpyeong-' + 'change-me'; // 아무 글자로나 바꿔 두면 투표자 이름을 더 알아보기 어려워져요
 
 const TABLES = {
-  proposals: { sheet: '제안', cols: ['id', 'category', 'dong', 'title', 'body', 'author', 'createdAt', 'images'],
-    headers: ['번호', '분류', '동', '제목', '내용', '작성자', '작성 시각', '사진(드라이브 파일 ID)'] },
+  proposals: { sheet: '제안', cols: ['id', 'category', 'dong', 'title', 'body', 'author', 'createdAt', 'images', 'editedAt'],
+    headers: ['번호', '분류', '동', '제목', '내용', '작성자', '작성 시각', '사진(드라이브 파일 ID)', '수정 시각'] },
   likes: { sheet: '공감', cols: ['pid', 'name', 'at'], headers: ['제안 번호', '이름', '시각'] },
   comments: { sheet: '댓글', cols: ['id', 'pid', 'author', 'text', 'createdAt'],
     headers: ['번호', '제안 번호', '작성자', '내용', '작성 시각'] },
   votes: { sheet: '투표', cols: ['key', 'picks', 'at'], headers: ['투표자(암호)', '고른 제안 번호', '시각'] },
 };
-const TIME_COLS = ['createdAt', 'at'];
+const TIME_COLS = ['createdAt', 'at', 'editedAt'];
 const JSON_COLS = ['picks', 'images'];
 const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 const CACHE_KEY = 'db-v1';
@@ -78,7 +78,7 @@ function save_(db, touched) {
     const sh = sheet_(T.sheet, T.headers);
     sh.clearContents();
     const rows = [T.headers].concat(db[t].map(o => T.cols.map(c =>
-      TIME_COLS.indexOf(c) >= 0 ? new Date(o[c]) : JSON_COLS.indexOf(c) >= 0 ? JSON.stringify(o[c] || []) : String(o[c]))));
+      TIME_COLS.indexOf(c) >= 0 ? (o[c] ? new Date(o[c]) : '') : JSON_COLS.indexOf(c) >= 0 ? JSON.stringify(o[c] || []) : String(o[c]))));
     T.cols.forEach((c, i) => {
       if (TIME_COLS.indexOf(c) < 0) sh.getRange(1, i + 1, rows.length, 1).setNumberFormat('@');
     });
@@ -168,6 +168,15 @@ function doPost(e) {
     catch (err) { return json_({ ok: false, error: String(err.message || err) }); }
     b.images = saved;
   }
+  if (b.action === 'editProposal') {
+    const db0 = load_();
+    const bad = core_checkEdit(db0, b, isTeacher);
+    if (bad) return json_({ ok: false, error: bad });
+    const room = CORE_MAX_IMAGES - core_keptImages(db0.proposals.find(p => p.id === b.pid), b.keep).length;
+    try { saved = saveImages_((Array.isArray(b.images) ? b.images : []).slice(0, Math.max(0, room))); }
+    catch (err) { return json_({ ok: false, error: String(err.message || err) }); }
+    b.added = saved; // 새로 저장한 사진만 붙여요
+  }
 
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
@@ -178,6 +187,7 @@ function doPost(e) {
     if (res.ok && res.touched && res.touched.length) save_(db, res.touched);
     if (!res.ok) trashImages_(saved);
     if (res.ok && gone.length) trashImages_(gone);
+    if (res.ok && res.removed) { trashImages_(res.removed); delete res.removed; }
     return json_(res);
   } catch (err) {
     trashImages_(saved);
@@ -275,6 +285,23 @@ function core_checkPropose(db, b) {
   return "";
 }
 
+// 제안을 고치기 전에 미리 확인해요 (쓴 사람만, 제안 기간에만)
+function core_checkEdit(db, b, isTeacher) {
+  const p = db.proposals.find(x => x.id === b.pid);
+  if (!p) return "지워진 제안이에요.";
+  const name = core_clean(b.name, 20);
+  if (!isTeacher && !(name && p.author === name)) return "내가 쓴 제안만 고칠 수 있어요.";
+  if (db.settings.phase !== "propose") return "제안 기간이 끝나서 고칠 수 없어요.";
+  if (!core_clean(b.title, 40) || !core_clean(b.body, 800)) return "제목과 내용을 모두 적어 주세요.";
+  if (!core_clean(b.dong, 20)) return "제안할 동을 골라 주세요.";
+  return "";
+}
+// 고칠 때 남겨 둘 기존 사진 (원래 이 제안에 있던 사진만)
+function core_keptImages(p, keep) {
+  const had = p.images || [];
+  return (Array.isArray(keep) ? keep : []).filter((x, i, a) => had.indexOf(x) >= 0 && a.indexOf(x) === i);
+}
+
 // 요청 하나를 처리해요. 바뀐 표 이름을 touched 에 담아 돌려줘요.
 function core_apply(db, b, isTeacher, keyFn) {
   const s = db.settings;
@@ -294,6 +321,19 @@ function core_apply(db, b, isTeacher, keyFn) {
       const id = "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       db.proposals.push({ id, category, dong, title, body, author: name, createdAt: Date.now(), images });
       return { ok: true, id, touched: ["proposals"] };
+    }
+    case "editProposal": {
+      const bad = core_checkEdit(db, b, isTeacher);
+      if (bad) return fail(bad);
+      const p = find(b.pid);
+      const keep = core_keptImages(p, b.keep);
+      const added = (Array.isArray(b.added) ? b.added : []).filter(x => typeof x === "string" && x);
+      const removed = (p.images || []).filter(x => keep.indexOf(x) < 0);
+      p.title = core_clean(b.title, 40); p.body = core_clean(b.body, 800);
+      p.dong = core_clean(b.dong, 20); p.category = core_clean(b.category, 20);
+      p.images = keep.concat(added).slice(0, CORE_MAX_IMAGES);
+      p.editedAt = Date.now();
+      return { ok: true, removed, touched: ["proposals"] };
     }
     case "like": {
       if (s.phase !== "propose") return fail("공감 기간이 끝났어요.");

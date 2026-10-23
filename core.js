@@ -55,6 +55,23 @@ function core_checkPropose(db, b) {
   return "";
 }
 
+// 제안을 고치기 전에 미리 확인해요 (쓴 사람만, 제안 기간에만)
+function core_checkEdit(db, b, isTeacher) {
+  const p = db.proposals.find(x => x.id === b.pid);
+  if (!p) return "지워진 제안이에요.";
+  const name = core_clean(b.name, 20);
+  if (!isTeacher && !(name && p.author === name)) return "내가 쓴 제안만 고칠 수 있어요.";
+  if (db.settings.phase !== "propose") return "제안 기간이 끝나서 고칠 수 없어요.";
+  if (!core_clean(b.title, 40) || !core_clean(b.body, 800)) return "제목과 내용을 모두 적어 주세요.";
+  if (!core_clean(b.dong, 20)) return "제안할 동을 골라 주세요.";
+  return "";
+}
+// 고칠 때 남겨 둘 기존 사진 (원래 이 제안에 있던 사진만)
+function core_keptImages(p, keep) {
+  const had = p.images || [];
+  return (Array.isArray(keep) ? keep : []).filter((x, i, a) => had.indexOf(x) >= 0 && a.indexOf(x) === i);
+}
+
 // 요청 하나를 처리해요. 바뀐 표 이름을 touched 에 담아 돌려줘요.
 function core_apply(db, b, isTeacher, keyFn) {
   const s = db.settings;
@@ -74,6 +91,19 @@ function core_apply(db, b, isTeacher, keyFn) {
       const id = "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       db.proposals.push({ id, category, dong, title, body, author: name, createdAt: Date.now(), images });
       return { ok: true, id, touched: ["proposals"] };
+    }
+    case "editProposal": {
+      const bad = core_checkEdit(db, b, isTeacher);
+      if (bad) return fail(bad);
+      const p = find(b.pid);
+      const keep = core_keptImages(p, b.keep);
+      const added = (Array.isArray(b.added) ? b.added : []).filter(x => typeof x === "string" && x);
+      const removed = (p.images || []).filter(x => keep.indexOf(x) < 0);
+      p.title = core_clean(b.title, 40); p.body = core_clean(b.body, 800);
+      p.dong = core_clean(b.dong, 20); p.category = core_clean(b.category, 20);
+      p.images = keep.concat(added).slice(0, CORE_MAX_IMAGES);
+      p.editedAt = Date.now();
+      return { ok: true, removed, touched: ["proposals"] };
     }
     case "like": {
       if (s.phase !== "propose") return fail("공감 기간이 끝났어요.");

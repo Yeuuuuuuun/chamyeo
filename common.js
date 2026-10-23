@@ -58,6 +58,7 @@ const LocalServer = {
     if (b.action === "checkCode") return { ok: true };
     // 연습 모드에서는 사진을 글자(data URL)로 바꿔 이 기기에 그대로 저장해요
     if (b.action === "image") return { ok: true, data: b.id };
+    if (b.action === "editProposal") b.added = Array.isArray(b.images) ? b.images : [];
     const res = core_apply(db, b, isTeacher, n => this.keyOf(n));
     if (res.ok && !this.save(db)) return { ok: false, error: "이 기기의 저장 공간이 가득 찼어요. 사진을 줄이거나 다른 제안을 지워 주세요." };
     return res;
