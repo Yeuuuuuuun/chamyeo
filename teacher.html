@@ -76,8 +76,10 @@ function render() {
   const props = d.proposals.slice().sort((a, b) => b.createdAt - a.createdAt);
   const active = document.activeElement && document.activeElement.closest("#settingsForm");
   if (active && $("#settingsForm")) { renderLists(); return; } // 설정을 고치는 중에는 그 칸을 건드리지 않아요
+  const sameVersion = d.version === CORE_VERSION;
   $("#view").innerHTML = `
   <div style="padding-block:28px 60px;display:grid;gap:24px">
+    ${sameVersion ? "" : `<div class="notice" style="background:var(--gold-soft);margin:0"><b style="color:var(--heart)">서버(Apps Script)가 예전 버전이에요.</b> 사이트는 버전 ${CORE_VERSION}인데 서버는 ${d.version ? "버전 " + d.version : "그보다 예전 버전"}이에요. 사진 붙이기, 제안 고치기 같은 새 기능이 저장되지 않을 수 있어요.<br>Apps Script에서 최신 Code.gs를 붙여넣고 <b>배포 → 배포 관리 → ✏️ → 버전: 새 버전 → 배포</b>를 눌러 주세요.</div>`}
     <div class="stats" style="margin:0">
       <div><span>제안</span><strong>${d.proposals.length}</strong><em>건</em></div>
       <div><span>투표 후보</span><strong>${ranked.length}</strong><em>건</em></div>
@@ -106,7 +108,7 @@ function render() {
       </section>
     </div>
     <section class="panel">
-      <h2>제안 관리</h2>
+      <h2>제안 관리 <small class="refresh">서버 버전 ${d.version || "예전"} · 사이트 버전 ${CORE_VERSION}${sameVersion ? " ✓" : ""}</small></h2>
       <p style="margin:-6px 0 12px;color:var(--muted);font-size:14px">${esc(CFG.regionName)}와 관계없는 제안이나 알맞지 않은 글·사진은 지워 주세요. 지우면 그 제안의 공감, 댓글, 사진도 함께 지워져요.</p>
       <div id="propList"></div>
     </section>

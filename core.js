@@ -2,6 +2,8 @@
  * 고치면 apps-script/Code.gs 아래쪽의 같은 부분도 똑같이 고쳐 주세요. */
 const CORE_PHASES = ["propose", "vote", "result"];
 const CORE_DEFAULTS = { phase: "propose", threshold: 5, voteMax: 1 };
+// 서버(Code.gs)와 사이트가 같은 버전인지 확인하는 번호. 규칙을 바꿀 때마다 1씩 올려요.
+const CORE_VERSION = 4;
 const CORE_MAX_IMAGES = 3; // 제안 하나에 붙일 수 있는 사진 수
 
 function core_clean(s, max) {
@@ -43,6 +45,7 @@ function core_state(db, name, isTeacher, needCode, keyFn) {
     results,
     teacher: !!isTeacher,
     needCode: !!needCode,
+    version: CORE_VERSION,
   };
 }
 
@@ -163,5 +166,5 @@ function core_apply(db, b, isTeacher, keyFn) {
       return { ok: true, touched: ["votes"] };
     }
   }
-  return fail("알 수 없는 요청이에요.");
+  return fail("알 수 없는 요청이에요 (" + core_clean(b.action, 30) + ").");
 }
